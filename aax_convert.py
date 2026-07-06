@@ -663,6 +663,31 @@ def write_chapter_file(chapters, chapter_file):
             fd.write(f"CHAPTER{i+1:02d}name={safe_title}\n")
 
 
+def parse_exclude_chapters(exclude_str):
+    """Parse exclude-chapters string into a set of global chapter numbers.
+    
+    Accepts comma-separated numbers and ranges: '1,2,5,10-15'
+    """
+    if not exclude_str:
+        return set()
+    excluded = set()
+    for part in exclude_str.split(","):
+        part = part.strip()
+        if "-" in part:
+            try:
+                start, end = part.split("-", 1)
+                for i in range(int(start), int(end) + 1):
+                    excluded.add(i)
+            except ValueError:
+                pass
+        else:
+            try:
+                excluded.add(int(part))
+            except ValueError:
+                pass
+    return excluded
+
+
 def concat_files(args, intermediate_m4as, destdir, all_md, cover_file):
     """Concatenate multiple intermediate m4a files into a single output file"""
     concat_list = os.path.join(destdir, "concat_list.txt")
@@ -729,6 +754,7 @@ def concat_files(args, intermediate_m4as, destdir, all_md, cover_file):
         all_chapters = []
         time_offset = 0.0
         global_chapter_num = 0
+        excluded = parse_exclude_chapters(args.exclude_chapters)
         for i, md in enumerate(all_md):
             chapters = md.get("chapters", [])
             if not chapters:
@@ -745,6 +771,8 @@ def concat_files(args, intermediate_m4as, destdir, all_md, cover_file):
                 continue
             for j, chapter in enumerate(chapters):
                 global_chapter_num += 1
+                if global_chapter_num in excluded:
+                    continue
                 start_time = float(chapter["start_time"]) + time_offset
                 all_chapters.append((start_time, global_chapter_num))
             # Get duration for time offset
@@ -838,6 +866,10 @@ def main():
     ap.add_argument(
         "-n", "--concat", default=False, dest="concat", action="store_true",
         help="concatenate all input files into a single output"
+    )
+    ap.add_argument(
+        "-e", "--exclude-chapters", default=None, dest="exclude_chapters",
+        help="exclude specific chapters (global numbering). E.g. '1,2,104' or '1-5,100-104'"
     )
 
     ap.add_argument(nargs="+", dest="input")
