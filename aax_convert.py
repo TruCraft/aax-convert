@@ -8,6 +8,7 @@ import re
 import argparse
 from json import loads
 from json import dump as jdump
+import shutil
 import time
 from unicodedata import normalize
 
@@ -341,7 +342,6 @@ def embed_chapters(args, destdir, src, md, cover_file=None):
     """Embed chapters into a single M4B file using ffmpeg"""
     chapters = md["chapters"]
     t = md["format"]["tags"]
-    ext = codecs[args.container][1]
     codec = codecs[args.container][0]
     num_chapters = len(chapters)
 
@@ -370,18 +370,23 @@ def embed_chapters(args, destdir, src, md, cover_file=None):
     if cover_file and os.path.exists(cover_file):
         cmd.extend(["-i", cover_file])
 
-    # Add chapter metadata input
+    # Write chapter text file in FFmpeg's expected format
     chapter_file = os.path.join(destdir, "chapters.txt")
     with open(chapter_file, "w") as fd:
-        fd.write("FILEFORMAT=4\n")
-        for chapter_title, start_time in chapter_metadata:
+        for i, (chapter_title, start_time) in enumerate(chapter_metadata):
+            hours = int(start_time // 3600)
+            minutes = int((start_time % 3600) // 60)
+            seconds = int(start_time % 60)
+            ms = int((start_time % 1) * 1000)
+            time_str = f"{hours:02d}:{minutes:02d}:{seconds:02d}.{ms:03d}"
             safe_title = sanitize(chapter_title).replace("_", " ")
-            fd.write(f"CHAPTER{i+1:02d}=00:00:00.000\n")
+            fd.write(f"CHAPTER{i+1:02d}={time_str}\n")
             fd.write(f"CHAPTER{i+1:02d}name={safe_title}\n")
+
+    chapter_input_idx = 2 if (cover_file and os.path.exists(cover_file)) else 1
 
     cmd.extend([
         "-i", chapter_file,
-        "-map_metadata", "1",
         "-c:a", codec,
     ])
 
@@ -413,10 +418,10 @@ def embed_chapters(args, destdir, src, md, cover_file=None):
     if "genre" in tags:
         metadata_args.extend(["-metadata", f'genre={tags["genre"]}'])
 
-    ext = codecs[args.container][1]
+    ext = codecs[args.container][2]
     output = os.path.join(destdir, f"{sanitize(t.get('title', 'audiobook'))}.{ext}")
 
-    cmd.extend(metadata_args + [output])
+    cmd.extend(metadata_args + [output, "-map_chapters", str(chapter_input_idx)])
 
     if args.verbose or args.test:
         print(" ".join([f'"{arg}"' if " " in str(arg) else str(arg) for arg in cmd]))
@@ -434,6 +439,14 @@ def embed_chapters(args, destdir, src, md, cover_file=None):
     # Clean up chapter file
     if os.path.exists(chapter_file):
         os.unlink(chapter_file)
+    # Clean up cover extraction
+    cover_output = os.path.join(destdir, "cover.jpg")
+    if os.path.exists(cover_output) and not args.keep:
+        os.unlink(cover_output)
+    # Clean up metadata file
+    metadata_file = os.path.join(destdir, "metadata.json")
+    if os.path.exists(metadata_file) and not args.keep:
+        os.unlink(metadata_file)
 
     # Clean up intermediate file
     if not args.keep:
@@ -615,6 +628,79 @@ def process_wrapper(fn):
         print(f"Caught exception {e} while probing metadata")
 
 
+def concat_files(args, intermediate_m4as, destdir, all_md, cover_file):
+    """Concatenate multiple intermediate m4a files into a single output file"""
+    concat_list = os.path.join(destdir, "concat_list.txt")
+    with open(concat_list, "w") as fd:
+        for m4a_path in intermediate_m4as:
+            rel_path = os.path.relpath(m4a_path, destdir)
+            fd.write(f"file '{rel_path}'\n")
+
+    codec = codecs[args.container][0]
+    tags = all_md[0]["format"]["tags"]
+    metadata_args = []
+    if "title" in tags:
+        metadata_args.extend(["-metadata", f'title={tags["title"]}'])
+    if "artist" in tags:
+        metadata_args.extend(["-metadata", f'artist={tags["artist"]}'])
+    if "album_artist" in tags:
+        metadata_args.extend(["-metadata", f'album_artist={tags["album_artist"]}'])
+    if "album" in tags:
+        metadata_args.extend(["-metadata", f'album={tags["album"]}'])
+    if "date" in tags:
+        metadata_args.extend(["-metadata", f'date={tags["date"]}'])
+    if "genre" in tags:
+        metadata_args.extend(["-metadata", f'genre={tags["genre"]}'])
+    if "copyright" in tags:
+        metadata_args.extend(["-metadata", f'copyright={tags["copyright"]}'])
+
+    ext = codecs[args.container][2]
+    output = os.path.join(destdir, f"{sanitize(tags.get('title', 'audiobook'))}.{ext}")
+
+    cmd = ["ffmpeg", "-loglevel", "error", "-stats", "-n"]
+
+    # Use concat demuxer to concatenate m4a files
+    cmd.extend(["-f", "concat", "-safe", "0"])
+    cmd.extend(["-i", concat_list])
+
+    if cover_file and os.path.exists(cover_file):
+        cmd.extend(["-i", cover_file])
+
+    cmd.extend(["-map", "0:a:0"])
+
+    # Map cover art if available
+    if cover_file and os.path.exists(cover_file):
+        cmd.extend(["-map", "1:v:0", "-c:v", "copy", "-disposition:v:0", "attached_pic"])
+
+    cmd.extend(["-c:a", codec])
+    cmd.extend(metadata_args)
+    cmd.extend([output])
+
+    if args.test or args.verbose:
+        print(" ".join([f'"{arg}"' if " " in str(arg) else str(arg) for arg in cmd]))
+        print(f"Concatenated output: {output}")
+        if args.test:
+            return output
+
+    # Calculate total duration for progress bar
+    total_duration = sum(float(md["format"].get("duration", 0)) for md in all_md)
+    title = tags.get("title", "concatenated audiobook")
+    show_progress = HAS_TQDM and not args.verbose
+    run_ffmpeg_with_progress(cmd, total_duration, f"Concatenating {title}", show_progress)
+
+    # Clean up intermediate files
+    if not args.keep:
+        for m4a_path in intermediate_m4as:
+            if os.path.exists(m4a_path):
+                os.unlink(m4a_path)
+        if os.path.exists(concat_list):
+            os.unlink(concat_list)
+    elif args.verbose:
+        print(f"Keeping intermediate files")
+
+    return output
+
+
 def main():
     global args
     ap = argparse.ArgumentParser()
@@ -659,6 +745,10 @@ def main():
     ap.add_argument(
         "-x", "--extract-metadata", default=False, dest="metadata", action="store_true", help="only extract metadata"
     )
+    ap.add_argument(
+        "-n", "--concat", default=False, dest="concat", action="store_true",
+        help="concatenate all input files into a single output"
+    )
 
     ap.add_argument(nargs="+", dest="input")
     args = ap.parse_args()
@@ -673,19 +763,105 @@ def main():
     if something_is_wrong:
         exit(1)
 
+    if args.container == "m4b" and args.concat:
+        if not shutil.which("AtomicParsley"):
+            print("Error: AtomicParsley is required for concatenating audiobooks into a single M4B file with chapters.")
+            print("Install it with: brew install atomicparsley")
+            exit(1)
+
     if args.mono:
         args.outdir += "-mono"
 
-    if multiprocessing is None:
-        args.processes = 1
+    if args.concat:
+        # Use a single output directory for all concatenated files
+        first_md = probe_metadata(args, args.input[0])
+        concat_destdir = os.path.join(
+            args.outdir,
+            first_md["format"]["tags"]["artist"],
+            first_md["format"]["tags"]["title"].replace("/", "-")
+        )
+        concat_destdir = sanitize(concat_destdir)
+        os.makedirs(concat_destdir, exist_ok=True)
 
-    if args.processes < 2:
+        intermediate_m4as = []
+        all_md = []
+        final_cover = None
+
         for fn in args.input:
-            process_wrapper(fn)
+            md = None
+            try:
+                md = probe_metadata(args, fn)
+            except Exception as e:
+                print(f"Caught exception {e} while probing metadata for {fn}")
+                continue
+
+            destfn = os.path.basename(fn).replace(".aax", ".m4a")
+            output = os.path.join(concat_destdir, destfn)
+            if os.path.exists(output) and args.overwrite:
+                os.unlink(output)
+
+            ac = "2"
+            ab = md["format"]["bit_rate"]
+            if args.mono:
+                ac = "1"
+                ab = str(int(ab) / 2)
+
+            tags = md["format"]["tags"]
+            metadata_args = []
+            if "title" in tags:
+                metadata_args.extend(["-metadata", f'title={tags["title"]}'])
+            if "artist" in tags:
+                metadata_args.extend(["-metadata", f'artist={tags["artist"]}'])
+            if "album_artist" in tags:
+                metadata_args.extend(["-metadata", f'album_artist={tags["album_artist"]}'])
+            if "album" in tags:
+                metadata_args.extend(["-metadata", f'album={tags["album"]}'])
+            if "date" in tags:
+                metadata_args.extend(["-metadata", f'date={tags["date"]}'])
+            if "genre" in tags:
+                metadata_args.extend(["-metadata", f'genre={tags["genre"]}'])
+            if "copyright" in tags:
+                metadata_args.extend(["-metadata", f'copyright={tags["copyright"]}'])
+            metadata_args.extend(["-metadata", "track=1/1"])
+
+            cmd = [
+                "ffmpeg", "-loglevel", "error", "-stats", "-activation_bytes", args.auth, "-n",
+                "-i", fn, "-vn", "-codec:a", codecs[args.container][0],
+                "-ab", ab, "-ac", ac, "-map_metadata", "-1",
+            ] + metadata_args + [output]
+
+            if args.test or args.verbose:
+                print(" ".join([f'"{arg}"' if " " in str(arg) else str(arg) for arg in cmd]))
+
+            total_duration = float(md["format"].get("duration", 0))
+            title = md["format"]["tags"].get("title", "audio")
+            show_progress = HAS_TQDM and not args.verbose
+            run_ffmpeg_with_progress(cmd, total_duration, f"Transcoding {title}", show_progress)
+
+            intermediate_m4as.append(output)
+            all_md.append(md)
+
+            # Use first cover file found
+            if final_cover is None:
+                cover_file = os.path.join(concat_destdir, "cover.jpg")
+                try:
+                    extract_image(args, concat_destdir, fn)
+                    final_cover = cover_file
+                except Exception:
+                    pass
+
+        concat_files(args, intermediate_m4as, concat_destdir, all_md, final_cover)
     else:
-        proc_pool = multiprocessing.Pool(processes=args.processes, maxtasksperchild=1)
-        setproctitle("transcode_dispatcher")
-        proc_pool.map(process_wrapper, args.input, chunksize=1)
+        if multiprocessing is None:
+            args.processes = 1
+
+        if args.processes < 2:
+            for fn in args.input:
+                process_wrapper(fn)
+        else:
+            proc_pool = multiprocessing.Pool(processes=args.processes, maxtasksperchild=1)
+            setproctitle("transcode_dispatcher")
+            proc_pool.map(process_wrapper, args.input, chunksize=1)
 
     os.system("stty echo")
 
