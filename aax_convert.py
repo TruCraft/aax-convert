@@ -3,7 +3,7 @@
 # -*- coding: utf-8 -*-
 
 import os
-from subprocess import check_output, Popen, PIPE, STDOUT
+from subprocess import check_output, Popen, PIPE, STDOUT, run as subrun
 import re
 import argparse
 from json import loads
@@ -360,6 +360,7 @@ def embed_chapters(args, destdir, src, md, cover_file=None):
         "ffmpeg",
         "-loglevel", "error",
         "-stats",
+        "-n",
         "-activation_bytes",
         args.auth,
         "-i",
@@ -570,9 +571,9 @@ def convert_file(args, fn, md):
         "-loglevel",
         "error",
         "-stats",
+        "-n",
         "-activation_bytes",
         args.auth,
-        "-n",
         "-i",
         fn,
         "-vn",
@@ -626,6 +627,40 @@ def process_wrapper(fn):
         convert_file(args, fn, md)
     except Exception as e:
         print(f"Caught exception {e} while probing metadata")
+
+
+def extract_chapters_from_m4a(m4a_path):
+    """Extract chapter data from an m4a file using ffprobe"""
+    try:
+        result = subrun(
+            ["ffprobe", "-v", "error", "-show_entries", "chapters=id,start,end,tags:title", "-of", "json", m4a_path],
+            capture_output=True, text=True
+        )
+        data = loads(result.stdout)
+        chapters = []
+        if "chapters" in data:
+            for ch in data["chapters"]:
+                start = float(ch.get("start", 0))
+                end = float(ch.get("end", 0))
+                title = ch.get("tags", {}).get("title", "")
+                chapters.append((start, end, title))
+        return chapters
+    except Exception:
+        return []
+
+
+def write_chapter_file(chapters, chapter_file):
+    """Write chapter data to a file for AtomicParsley"""
+    with open(chapter_file, "w") as fd:
+        for i, (start, end, title) in enumerate(chapters):
+            hours = int(start // 3600)
+            minutes = int((start % 3600) // 60)
+            seconds = int(start % 60)
+            ms = int((start % 1) * 1000)
+            time_str = f"{hours:02d}:{minutes:02d}:{seconds:02d}.{ms:03d}"
+            safe_title = sanitize(title).replace("_", " ") if title else f"Chapter {i+1}"
+            fd.write(f"CHAPTER{i+1:02d}={time_str}\n")
+            fd.write(f"CHAPTER{i+1:02d}name={safe_title}\n")
 
 
 def concat_files(args, intermediate_m4as, destdir, all_md, cover_file):
@@ -687,6 +722,57 @@ def concat_files(args, intermediate_m4as, destdir, all_md, cover_file):
     title = tags.get("title", "concatenated audiobook")
     show_progress = HAS_TQDM and not args.verbose
     run_ffmpeg_with_progress(cmd, total_duration, f"Concatenating {title}", show_progress)
+
+    # Embed chapters into the final m4b using MP4Box if available
+    if args.container == "m4b" and shutil.which("MP4Box"):
+        # Build chapter list from original .aax metadata (m4a files don't preserve chapters via copy codec)
+        all_chapters = []
+        time_offset = 0.0
+        for i, md in enumerate(all_md):
+            chapters = md.get("chapters", [])
+            if not chapters:
+                # Try to get duration for time offset
+                try:
+                    result = subrun(
+                        ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", intermediate_m4as[i]],
+                        capture_output=True, text=True
+                    )
+                    duration = float(result.stdout.strip())
+                except Exception:
+                    duration = 0
+                time_offset += duration
+                continue
+            for j, chapter in enumerate(chapters):
+                chapter_title = chapter["tags"].get("title", f"Chapter {j + 1}")
+                start_time = float(chapter["start_time"]) + time_offset
+                all_chapters.append((start_time, chapter_title))
+            # Get duration for time offset
+            try:
+                result = subrun(
+                    ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", intermediate_m4as[i]],
+                    capture_output=True, text=True
+                )
+                duration = float(result.stdout.strip())
+            except Exception:
+                duration = 0
+            time_offset += duration
+
+        if all_chapters:
+            chapter_file = os.path.join(destdir, "chapters.txt")
+            with open(chapter_file, "w") as fd:
+                for i, (start_time, chapter_title) in enumerate(all_chapters):
+                    hours = int(start_time // 3600)
+                    minutes = int((start_time % 3600) // 60)
+                    seconds = int(start_time % 60)
+                    ms = int((start_time % 1) * 1000)
+                    time_str = f"{hours:02d}:{minutes:02d}:{seconds:02d}.{ms:03d}"
+                    safe_title = sanitize(chapter_title).replace("_", " ")
+                    fd.write(f"CHAPTER{i+1:02d}={time_str}\n")
+                    fd.write(f"CHAPTER{i+1:02d}name={safe_title}\n")
+            mp4box_cmd = ["MP4Box", "-itags", "title=0", "-add", output, "-chap", chapter_file, "-new", output]
+            subrun(mp4box_cmd)
+            if os.path.exists(chapter_file):
+                os.unlink(chapter_file)
 
     # Clean up intermediate files
     if not args.keep:
@@ -764,9 +850,9 @@ def main():
         exit(1)
 
     if args.container == "m4b" and args.concat:
-        if not shutil.which("AtomicParsley"):
-            print("Error: AtomicParsley is required for concatenating audiobooks into a single M4B file with chapters.")
-            print("Install it with: brew install atomicparsley")
+        if not shutil.which("MP4Box"):
+            print("Error: MP4Box (from gpac) is required for concatenating audiobooks into a single M4B file with chapters.")
+            print("Install it with: brew install gpac")
             exit(1)
 
     if args.mono:
@@ -825,7 +911,7 @@ def main():
             metadata_args.extend(["-metadata", "track=1/1"])
 
             cmd = [
-                "ffmpeg", "-loglevel", "error", "-stats", "-activation_bytes", args.auth, "-n",
+                "ffmpeg", "-loglevel", "error", "-stats", "-n", "-activation_bytes", args.auth,
                 "-i", fn, "-vn", "-codec:a", codecs[args.container][0],
                 "-ab", ab, "-ac", ac, "-map_metadata", "-1",
             ] + metadata_args + [output]
