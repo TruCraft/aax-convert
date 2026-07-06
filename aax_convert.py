@@ -767,15 +767,7 @@ def concat_files(args, intermediate_m4as, destdir, all_md, cover_file):
                 except Exception:
                     continue
 
-                # Extract chapter number from segment filename (format: "003.m4a")
-                base = os.path.basename(seg_file)
-                name_part = os.path.splitext(base)[0]
-                try:
-                    title = f"Chapter {int(name_part)}"
-                except ValueError:
-                    title = f"Chapter {len(all_chapters) + 1}"
-
-                all_chapters.append((time_offset, title))
+                all_chapters.append((time_offset, f"Chapter {len(all_chapters) + 1}"))
                 time_offset += duration
         else:
             # Build chapter list from original .aax metadata (m4a files don't preserve chapters via copy codec)
