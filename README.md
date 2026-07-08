@@ -57,10 +57,10 @@ pip install git+https://github.com/trucraft/aax-convert.git
 
 ### Manual Installation
 
-You can also run the script directly:
+You can also run the tool directly from a local clone:
 
 ```bash
-python aax_convert.py [options] input.aax
+uv run aax-convert [options] input.aax
 ```
 
 ## Usage
