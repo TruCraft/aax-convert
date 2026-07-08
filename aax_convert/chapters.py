@@ -69,14 +69,14 @@ def embed_chapters(args, destdir, src, md, cover_file=None):
         "ffmpeg",
         "-loglevel", "error",
         "-stats",
-        "-n",
+        "-y",
         "-activation_bytes",
         args.auth,
         "-i",
         src,
     ]
 
-    # Add cover art input if available
+    # Add cover art input if available (only for m4b format)
     if cover_file and os.path.exists(cover_file):
         cmd.extend(["-i", cover_file])
 
@@ -100,12 +100,13 @@ def embed_chapters(args, destdir, src, md, cover_file=None):
         "-c:a", codec,
     ])
 
-    # Add cover art streams if available
+    # Add cover art streams if available (only for m4b format)
     if cover_file and os.path.exists(cover_file):
         cmd.extend([
             "-map", "0:a:0",
             "-map", "1:v:0",
-            "-c:v", "copy",
+            "-c:v", "mjpeg",
+            "-q:v", "2",
             "-disposition:v:0", "attached_pic",
         ])
     else:
@@ -158,10 +159,7 @@ def embed_chapters(args, destdir, src, md, cover_file=None):
     if os.path.exists(metadata_file) and not args.keep:
         os.unlink(metadata_file)
 
-    # Clean up intermediate file
-    if not args.keep:
-        os.unlink(src)
-    elif args.verbose:
-        print(f"Keeping intermediate file: {src}")
+    # Clean up intermediate m4a file (always, since it's only used to create the m4b)
+    os.unlink(src)
 
     return output

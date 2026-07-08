@@ -167,6 +167,8 @@ def main(argv=None):
     if args.mono:
         args.outdir += "-mono"
 
+    args.extract_cover = lambda destdir, fn: extract_image(args, destdir, fn)
+
     if args.concat:
         excluded = parse_exclude_chapters(args.exclude_chapters)
         has_exclusions = len(excluded) > 0

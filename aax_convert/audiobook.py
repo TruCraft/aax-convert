@@ -39,8 +39,10 @@ def probe_metadata(args, fn):
 
 
 def extract_image(args, destdir, fn):
-    """Extract cover image from an AAX file."""
+    """Extract cover image from an AAX file, converting to JPEG for m4b compatibility."""
     output = os.path.join(destdir, "cover.jpg")
+    if os.path.exists(output):
+        os.unlink(output)
     cmd = [
         "ffmpeg",
         "-loglevel",
@@ -52,12 +54,10 @@ def extract_image(args, destdir, fn):
         "-i",
         fn,
         "-an",
-        "-codec:v",
-        "copy",
-        f"{output}",
+        "-c:v", "mjpeg",
+        "-q:v", "5",
+        output,
     ]
-    if os.path.exists(output) and args.overwrite:
-        os.unlink(output)
 
     if args.test or args.verbose:
         print("extracting cover art")

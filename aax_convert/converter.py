@@ -84,8 +84,9 @@ def split_with_ffmpeg(args, destdir, src, md, cover_file=None):
     if use_chapter_progress:
         chapter_iter = tqdm(chapters, desc="Splitting chapters", unit="ch", ncols=80)
 
-    # Check if we can embed cover art (supported in m4a/m4b/mp3, not in flac/opus via this method)
-    embed_cover = cover_file and os.path.exists(cover_file) and args.container in ["m4a", "m4b", "aac"]
+    # Check if we can embed cover art (supported in m4a/mp3/aac, not in flac/opus)
+    # For m4b, cover is embedded in embed_chapters at the end, not during single-file conversion
+    embed_cover = cover_file and os.path.exists(cover_file) and args.container in ["m4a", "aac"]
 
     success = True
     for i, chapter in enumerate(chapter_iter):
