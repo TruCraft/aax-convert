@@ -12,6 +12,7 @@ Inspired by [ckuethe/aax2mp3_py](https://github.com/ckuethe/aax2mp3_py), which i
 - M4B creates a single file with native chapter markers (no splitting into multiple files)
 - Uses ffmpeg for efficient chapter splitting of non-MP3 formats
 - Parallel processing support for batch conversions
+- M4B concatenation requires [MP4Box from GPAC](https://github.com/gpac/gpac)
 
 ## Installation
 
@@ -21,6 +22,7 @@ You'll need the following tools installed on your system:
 - `ffmpeg`
 - `ffprobe` (usually comes with ffmpeg)
 - `mp3splt`
+- `MP4Box` (from [GPAC](https://github.com/gpac/gpac), required for M4B concatenation)
 
 On macOS with Homebrew:
 ```bash
@@ -83,6 +85,13 @@ aax-convert -a YOUR_AUTHCODE -f m4b input.aax
 
 # Don't split into chapters (single file output)
 aax-convert -a YOUR_AUTHCODE -s input.aax
+
+# Concatenate multiple AAX files into a single output
+aax-convert -a YOUR_AUTHCODE -f m4b -c -n file1.aax file2.aax
+
+# Exclude specific chapters (global numbering)
+aax-convert -a YOUR_AUTHCODE -e '1,2,104' input.aax
+aax-convert -a YOUR_AUTHCODE -e '1-5,100-104' input.aax
 ```
 
 ### Command-line Options
@@ -90,6 +99,7 @@ aax-convert -a YOUR_AUTHCODE -s input.aax
 ```
 usage: aax-convert [-h] [-a AUTH] [-f {mp3,aac,m4a,m4b,flac,opus}] [-o OUTDIR]
                    [-p PROCESSES] [-c] [-i] [-m] [-s] [-k] [-t] [-v] [-x]
+                   [-n] [-e EXCLUDE_CHAPTERS]
                    input [input ...]
 
 positional arguments:
@@ -113,6 +123,10 @@ options:
   -v, --verbose         extra verbose output
   -x, --extract-metadata
                         only extract metadata
+  -n, --concat          concatenate all input files into a single output
+  -e, --exclude-chapters EXCLUDE_CHAPTERS
+                        exclude specific chapters (global numbering). E.g.
+                        '1,2,104' or '1-5,100-104'
 ```
 
 ### Getting Your Authcode
@@ -135,6 +149,8 @@ You can provide the authcode in three ways:
 - ✅ Metadata preservation
 - ✅ Cover art extraction
 - ✅ Mono downmix option
+- ✅ Concatenate multiple files into a single output (`-n`/`--concat`)
+- ✅ Exclude specific chapters (`-e`/`--exclude-chapters`)
 - ✅ Progress bars for long conversions (optional, requires `tqdm`)
 - ✅ Option to keep intermediate file (`-k`/`--keep`)
 
@@ -154,4 +170,4 @@ This installs `tqdm` for progress bar support. Without it, the tool works normal
 
 ## License
 
-WTFPL (Do What The Fork You Want To Public License)
+MIT
