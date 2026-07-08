@@ -1,9 +1,5 @@
 # AAX-Convert
 
-
-
-This is a rough rewrite of [KrumpetPirate AAXtoMP3](https://github.com/KrumpetPirate/AAXtoMP3) but in python. As with `AAXtoMP3` you will need to use a tool like [audible-activator](https://github.com/inAudible-NG/audible-activator) to get the authcode needed to decrypt the audio.
-
 Inspired by [ckuethe/aax2mp3_py](https://github.com/ckuethe/aax2mp3_py), which itself was a rewrite of KrumpetPirate's original tool.
 
 **Key advantages:**
